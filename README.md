@@ -13,23 +13,28 @@ npm install alist-kratos-sdk
 ```ts
 import { AlistClient } from "alist-kratos-sdk";
 
-// Option 1: explicit session token (e.g. from your own auth flow)
-const client = new AlistClient({
-  alistUrl: "http://localhost:5244",
-  kratosSessionToken: "kRatos_sess_abc123...",
-});
-
-// Option 2: auto-detect from `ory_kratos_session` cookie
+// Auto-detect from Kratos session cookie (browser) or pass token (Node)
 const client = await AlistClient.fromKratosSession(
-  "http://localhost:4433",  // Kratos public URL
-  "http://localhost:5244",  // AList URL (optional)
+  "http://localhost:4433", // Kratos public URL
+  "http://localhost:5244" // AList URL (optional, defaults to localhost)
 );
 
-if (!client) throw new Error("No valid Kratos session — user must log in");
+if (!client) throw new Error("No valid Kratos session – user must log in");
 
-// Option 3: shorthand if you have the token string
-const client = new AlistClient("kRatos_sess_abc123...");
+// Paths are **relative to the user’s BasePath**
+const { data } = await client.list("/"); // lists own root folder
+await client.upload("/photos/sunset.jpg", fileBlob);
+const blob = await client.download("/photos/sunset.jpg");
 ```
+
+## Auth flow
+
+The SDK sends `Authorization: kratos:<token>` on every request. AList validates the token, auto‑creates the AList user bound to the Kratos identity, and sets `BasePath = /<kratos_identity_id>`. The `me()` endpoint returns `base_path`. All file‑operations are scoped to that folder – you never need to manually prefix the identity ID.
+
+## API (unchanged)
+
+The rest of the API stays the same – `list`, `upload`, `download`, `mkdir`, `rename`, `remove`, `move`, `copy`, `search`, `ping` – but **paths are now relative** to the user’s folder.
+
 
 ## API
 
