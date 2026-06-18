@@ -1,6 +1,6 @@
 # alist-kratos-sdk
 
-JavaScript / TypeScript SDK for the AList file API with Ory Kratos authentication. Each user is auto-bound to their Kratos identity; the SDK handles the `kratos:<token>` Authorization header and exposes typed file operations.
+JavaScript / TypeScript SDK for the AList file API with Ory Kratos authentication. Each user is auto-bound to their Kratos identity; the SDK handles the `kratos:<token>` Authorization header and exposes typed file operations scoped to the user's own folder.
 
 ## Install
 
@@ -16,25 +16,38 @@ import { AlistClient } from "alist-kratos-sdk";
 // Auto-detect from Kratos session cookie (browser) or pass token (Node)
 const client = await AlistClient.fromKratosSession(
   "http://localhost:4433", // Kratos public URL
-  "http://localhost:5244" // AList URL (optional, defaults to localhost)
+  "http://localhost:5244"  // AList URL (optional, defaults to localhost)
 );
 
 if (!client) throw new Error("No valid Kratos session – user must log in");
 
-// Paths are **relative to the user’s BasePath**
-const { data } = await client.list("/"); // lists own root folder
+// All paths are **relative to the user's BasePath**.
+// The SDK lazily fetches base_path via /api/me on first use and
+// forwards paths to AList, which enforces per-user containment server-side.
+const { data } = await client.list("/");           // lists own root folder
 await client.upload("/photos/sunset.jpg", fileBlob);
 const blob = await client.download("/photos/sunset.jpg");
 ```
 
-## Auth flow
+## Path semantics (v1.0 — breaking change)
 
-The SDK sends `Authorization: kratos:<token>` on every request. AList validates the token, auto‑creates the AList user bound to the Kratos identity, and sets `BasePath = /<kratos_identity_id>`. The `me()` endpoint returns `base_path`. All file‑operations are scoped to that folder – you never need to manually prefix the identity ID.
+Starting with v1.0, paths passed to SDK methods are **resolved relative to the authenticated user's BasePath**. Callers no longer need to (and cannot) include their own identity id in the URL.
 
-## API (unchanged)
+| Input path | Behaviour |
+|------------|-----------|
+| `"/"` or `""` | Returns the user's BasePath root (the `/\<identity_id\>` folder). |
+| `"photos/sunset.jpg"` (no leading slash) | AList auto-prefixes BasePath server-side → `/\<identity_id\>/photos/sunset.jpg`. |
+| `"/photos/sunset.jpg"` (leading slash) | Treated as absolute; **must** be inside BasePath or the server returns 403. |
+| `"/<other_identity_id>/..."` | Always rejected with 403 (BasePath containment). |
 
-The rest of the API stays the same – `list`, `upload`, `download`, `mkdir`, `rename`, `remove`, `move`, `copy`, `search`, `ping` – but **paths are now relative** to the user’s folder.
+The SDK never sends the literal BasePath prefix; it forwards whatever the caller supplies and lets AList enforce the boundary. The BasePath is discovered automatically via `me()` on first call (cached).
 
+### Migration from v0.x
+
+```diff
+- await client.upload("/abc123-id/photos/sunset.jpg", file);
++ await client.upload("/photos/sunset.jpg", file);
+```
 
 ## API
 
@@ -94,9 +107,13 @@ const found = await client.search("/", "report", { scope: 0 });
 
 ## Auth flow
 
-The SDK sends `Authorization: kratos:<token>` on every request. AList's custom middleware (`server/middlewares/auth.go`) detects the `kratos:` prefix, validates the token against the Kratos public API, and auto-provisions an AList user row bound to that identity. The user's `BasePath` is auto-set to `/<kratos_identity_id>`, so they can only read/write their own files.
+1. The SDK sends `Authorization: kratos:<token>` on every request.
+2. AList's middleware (`server/middlewares/auth.go`) detects the `kratos:` prefix and validates the session against the Kratos public API (`/sessions/whoami`).
+3. If the identity has no AList user yet, one is auto-provisioned with `BasePath = /<kratos_identity_id>` and `SsoID = "kratos:<kratos_identity_id>"`.
+4. The `me()` endpoint returns the cached `base_path`; the SDK stores it internally.
+5. All subsequent file operations are scoped to that BasePath by AList's server-side containment check (`internal/model/user.go:JoinPath`).
 
-You don't need to log in to AList directly — the Kratos session is the single source of truth. AList just trusts Kratos.
+You never need to log in to AList directly — the Kratos session is the single source of truth. AList just trusts Kratos.
 
 ## Browser vs Node
 
