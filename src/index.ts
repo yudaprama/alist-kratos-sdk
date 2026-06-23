@@ -8,8 +8,7 @@
  *   // Automatically discovers the user's basePath from /api/me
  *   // so all operations are scoped to the authenticated user's folder.
  *   const client = await AlistClient.fromKratosSession(
- *     "http://localhost:4433",  // Kratos public URL
- *     "http://localhost:5244"  // AList URL
+ *     "http://localhost:4455"  // Oathkeeper edge URL
  *   );
  *
  *   // Paths are relative to the user's base folder.
@@ -21,12 +20,6 @@
 export interface AlistConfig {
   /** AList base URL, e.g. http://localhost:5244 */
   alistUrl: string;
-  /** Ory Kratos session token (from cookie or X-Session-Token) */
-  kratosSessionToken: string;
-  /** Optional: override Kratos public URL for session validation */
-  kratosUrl?: string;
-  /** Optional: pre-built Authorization header (skips "kratos:" prefix) */
-  rawAuthHeader?: string;
 }
 
 export interface AlistFile {
@@ -83,7 +76,6 @@ export class AlistApiError extends Error {
 
 export class AlistClient {
   private readonly alistUrl: string;
-  private readonly authHeader: string;
   /**
    * User's BasePath (e.g. "/<identity_id>") discovered lazily via /api/me.
    * `null` until the first call to a method that needs it.
@@ -93,42 +85,23 @@ export class AlistClient {
 
   constructor(config: AlistConfig | string) {
     if (typeof config === "string") {
-      // Bare session token shortcut
-      const alistUrl = arguments[1] ?? "http://localhost:5244";
-      this.alistUrl = alistUrl.replace(/\/+$/, "");
-      this.authHeader = `kratos:${config}`;
+      this.alistUrl = config.replace(/\/+$/, "");
     } else {
       this.alistUrl = config.alistUrl.replace(/\/+$/, "");
-      this.authHeader =
-        config.rawAuthHeader ?? `kratos:${config.kratosSessionToken}`;
     }
   }
 
   /**
-   * Auto-create a client by validating a session via Kratos.
-   * Returns null if the session is invalid.
+   * Auto-create a client for the Oathkeeper-protected AList edge.
+   * Browser credentials are included on each request so Oathkeeper can validate
+   * the Kratos session cookie and inject identity headers upstream.
    *
-   * @param kratosUrl - Kratos public URL, e.g. http://localhost:4433
-   * @param alistUrl - AList base URL, defaults to http://localhost:5244
-   * @param sessionToken - Optional token. If omitted, reads `ory_kratos_session` cookie.
+   * @param alistUrl - AList edge URL, defaults to http://localhost:4455
    */
   static async fromKratosSession(
-    kratosUrl: string,
-    alistUrl = "http://localhost:5244",
-    sessionToken?: string,
+    alistUrl = "http://localhost:4455",
   ): Promise<AlistClient | null> {
-    const token =
-      sessionToken ?? (typeof document !== "undefined" ? readCookie("ory_kratos_session") : undefined);
-    if (!token) return null;
-
-    // Validate the session with Kratos /sessions/whoami
-    const valid = await validateKratosSession(kratosUrl, token);
-    if (!valid) return null;
-
-    return new AlistClient({
-      alistUrl,
-      kratosSessionToken: token,
-    });
+    return new AlistClient({ alistUrl });
   }
 
   // ─── Path helpers ────────────────────────────────────────────────────────
@@ -189,8 +162,8 @@ export class AlistClient {
     const url = `${this.alistUrl}${path.startsWith("/") ? path : "/" + path}`;
     const res = await fetch(url, {
       method,
+      credentials: "include",
       headers: {
-        Authorization: this.authHeader,
         ...(init?.body && !(init.body instanceof FormData)
           ? { "Content-Type": "application/json" }
           : {}),
@@ -333,7 +306,7 @@ export class AlistClient {
     url.searchParams.set("sign", "");
     if (password) url.searchParams.set("p", password);
     const res = await fetch(url.toString(), {
-      headers: { Authorization: this.authHeader },
+      credentials: "include",
       redirect: "follow",
     });
     if (!res.ok) {
@@ -357,7 +330,7 @@ export class AlistClient {
     if (password) url.searchParams.set("p", password);
     const res = await fetch(url.toString(), {
       method: "GET",
-      headers: { Authorization: this.authHeader },
+      credentials: "include",
       redirect: "manual",
     });
     if (res.status !== 302) {
@@ -420,29 +393,5 @@ export class AlistClient {
     return this.request("GET", "/ping")
       .then(() => true)
       .catch(() => false);
-  }
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────
-
-function readCookie(name: string): string | undefined {
-  if (typeof document === "undefined") return undefined;
-  const match = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)"));
-  return match ? decodeURIComponent(match[1]) : undefined;
-}
-
-async function validateKratosSession(
-  kratosUrl: string,
-  token: string,
-): Promise<boolean> {
-  try {
-    const res = await fetch(`${kratosUrl.replace(/\/+$/, "")}/sessions/whoami`, {
-      headers: { "X-Session-Token": token, Accept: "application/json" },
-    });
-    if (!res.ok) return false;
-    const session = (await res.json()) as { active?: boolean };
-    return session.active === true;
-  } catch {
-    return false;
   }
 }
