@@ -1,6 +1,6 @@
 {
   "name": "alist-kratos-sdk",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "JavaScript SDK for AList file API with Ory Kratos authentication",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
