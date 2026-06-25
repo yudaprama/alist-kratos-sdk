@@ -1,6 +1,6 @@
 # alist-kratos-sdk
 
-JavaScript / TypeScript SDK for the AList file API with Ory Kratos authentication. Each user is auto-bound to their Kratos identity; the SDK handles the `kratos:<token>` Authorization header and exposes typed file operations scoped to the user's own folder.
+JavaScript / TypeScript SDK for the AList file API behind the Ory Oathkeeper edge. The edge validates the Kratos session cookie and injects the user's identity; the SDK sends cookie-authenticated requests and exposes typed file operations scoped to the user's own folder.
 
 ## Install
 
@@ -13,10 +13,11 @@ npm install alist-kratos-sdk
 ```ts
 import { AlistClient } from "alist-kratos-sdk";
 
-// Auto-detect from Kratos session cookie (browser) or pass token (Node)
+// Browser: the ory_kratos_session cookie is sent automatically (credentials:"include").
+// The URL MUST include the /.assets/alist mount prefix — AList's edge rules only
+// match under it, and paths like /api/me are appended verbatim.
 const client = await AlistClient.fromKratosSession(
-  "http://localhost:4433", // Kratos public URL
-  "http://localhost:5244"  // AList URL (optional, defaults to localhost)
+  "http://localhost:4455/.assets/alist", // edge + mount prefix (also the default)
 );
 
 if (!client) throw new Error("No valid Kratos session – user must log in");
@@ -107,34 +108,38 @@ const found = await client.search("/", "report", { scope: 0 });
 
 ## Auth flow
 
-1. The SDK sends `Authorization: kratos:<token>` on every request.
-2. AList's middleware (`server/middlewares/auth.go`) detects the `kratos:` prefix and validates the session against the Kratos public API (`/sessions/whoami`).
-3. If the identity has no AList user yet, one is auto-provisioned with `BasePath = /<kratos_identity_id>` and `SsoID = "kratos:<kratos_identity_id>"`.
+The SDK relies on the **Oathkeeper edge**, not a bearer token:
+
+1. Every request is sent with `credentials: "include"`, so the browser attaches the `ory_kratos_session` cookie. **No `Authorization` header is sent** — the edge's AList mutator blanks it anyway.
+2. Oathkeeper's `cookie_session` authenticator validates the cookie against Kratos `/sessions/whoami` and, on success, injects `X-User-Id` + identity traits (and blanks `Authorization`) before forwarding to AList.
+3. AList's middleware (`server/middlewares/auth.go`) reads the edge-injected `X-User-Id`. If the identity has no AList user yet, one is auto-provisioned with `BasePath = /<kratos_identity_id>` and `SsoID = "kratos:<kratos_identity_id>"`.
 4. The `me()` endpoint returns the cached `base_path`; the SDK stores it internally.
 5. All subsequent file operations are scoped to that BasePath by AList's server-side containment check (`internal/model/user.go:JoinPath`).
 
-You never need to log in to AList directly — the Kratos session is the single source of truth. AList just trusts Kratos.
+You never need to log in to AList directly — the Kratos session (validated at the edge) is the single source of truth.
+
+> **Routing note:** the `alistUrl` must be the edge origin **with** the `/.assets/alist` prefix (e.g. `http://localhost:4455/.assets/alist`, or `https://backend.getkawai.com/.assets/alist` in prod). The SDK appends `/api/...`, `/d/...`, `/p/...`, `/ping` to it; without the prefix those paths match no edge rule and return `404`. Direct-to-AList usage (bypassing the edge) is not supported in browser contexts — AList is localhost-only.
 
 ## Browser vs Node
 
-The SDK works in both browsers and Node 18+:
+The SDK is designed for the **browser**, where the `ory_kratos_session` cookie is present and `credentials: "include"` delivers it to the edge:
 
-- `fromKratosSession()` reads the `ory_kratos_session` cookie in browsers; in Node pass the token explicitly as the third arg.
-- `fetch` and `FormData` are available natively in both runtimes.
+- `fromKratosSession(url?)` just constructs a client pointed at the edge; the cookie does the authentication.
+- `fetch` and `FormData` are native in browsers and Node 18+.
 - No DOM dependencies.
+
+For server-side (Node) use without a browser cookie, talk to AList through the edge with a cookie forwarded manually, or run AList's own admin path out of band — the legacy `kratos:<token>` Authorization scheme is no longer used (the edge blanks `Authorization`).
 
 ## Demo
 
 ```ts
 import { AlistClient } from "alist-kratos-sdk";
 
-const client = await AlistClient.fromKratosSession(
-  "http://localhost:4433",
-);
+const client = await AlistClient.fromKratosSession(); // default edge + prefix
 
 if (!client) {
-  // redirect to Kratos login
-  window.location.href = "http://localhost:4455/login.html";
+  // redirect to Kratos login (served behind the same edge)
+  window.location.href = "http://localhost:4455/.ory/kratos/public/self-service/login/browser";
 } else {
   // render file picker, list/upload, etc.
   const { data } = await client.list();

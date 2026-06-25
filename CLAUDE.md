@@ -134,17 +134,16 @@ git push --follow-tags
 ```ts
 import { AlistClient } from "alist-kratos-sdk";
 
-// Auto-detect from Kratos session cookie
+// Browser: cookie-authenticated through the Ory Oathkeeper edge.
+// The URL MUST include the /.assets/alist mount prefix (also the default).
+// No Authorization header — the edge validates the Kratos cookie and injects
+// X-User-Id; the legacy kratos:<token> scheme is unused (edge blanks Authorization).
 const client = await AlistClient.fromKratosSession(
-  "http://localhost:4433",  // Kratos public URL
-  "http://localhost:5244",  // AList URL
+  "http://localhost:4455/.assets/alist", // edge + mount prefix
 );
 
-// Or pass a token directly
-const client = new AlistClient({
-  alistUrl: "http://localhost:5244",
-  kratosSessionToken: "kRatos_sess_abc123...",
-});
+// Or construct directly with the same prefixed origin
+const client2 = new AlistClient({ alistUrl: "http://localhost:4455/.assets/alist" });
 
 await client.me();
 await client.list("/", { page: 1, per_page: 50 });

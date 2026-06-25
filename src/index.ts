@@ -8,7 +8,7 @@
  *   // Automatically discovers the user's basePath from /api/me
  *   // so all operations are scoped to the authenticated user's folder.
  *   const client = await AlistClient.fromKratosSession(
- *     "http://localhost:4455"  // Oathkeeper edge URL
+ *     "http://localhost:4455/.assets/alist"  // Oathkeeper edge + AList mount prefix
  *   );
  *
  *   // Paths are relative to the user's base folder.
@@ -18,7 +18,11 @@
  */
 
 export interface AlistConfig {
-  /** AList base URL, e.g. http://localhost:5244 */
+  /**
+   * AList origin — the edge URL WITH the /.assets/alist mount prefix
+   * (e.g. http://localhost:4455/.assets/alist). Paths like /api/me and /d
+   * are appended to this, so the prefix must be included for edge routing.
+   */
   alistUrl: string;
 }
 
@@ -94,12 +98,18 @@ export class AlistClient {
   /**
    * Auto-create a client for the Oathkeeper-protected AList edge.
    * Browser credentials are included on each request so Oathkeeper can validate
-   * the Kratos session cookie and inject identity headers upstream.
+   * the Kratos session cookie and inject identity headers upstream. No
+   * Authorization header is sent — the edge authenticates via the cookie and
+   * blanks Authorization, so the legacy `kratos:<token>` scheme is unused.
    *
-   * @param alistUrl - AList edge URL, defaults to http://localhost:4455
+   * The URL MUST include the /.assets/alist mount prefix (alist rules only
+   * match under it); paths like /api/me are appended verbatim.
+   *
+   * @param alistUrl - AList edge URL with mount prefix,
+   *                   defaults to http://localhost:4455/.assets/alist
    */
   static async fromKratosSession(
-    alistUrl = "http://localhost:4455",
+    alistUrl = "http://localhost:4455/.assets/alist",
   ): Promise<AlistClient | null> {
     return new AlistClient({ alistUrl });
   }
